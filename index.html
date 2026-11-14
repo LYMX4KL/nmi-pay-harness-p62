@@ -8,6 +8,7 @@
   #payment-container { border: 1px solid #ccc; padding: 12px; min-height: 120px; }
   #events { white-space: pre-wrap; font: 11px/1.5 monospace; background: #f6f6f6; padding: 8px; max-height: 300px; overflow: auto; }
   #result { white-space: pre-wrap; font: 12px/1.5 monospace; background: #eef7ee; padding: 8px; }
+  #diag { white-space: pre-wrap; font: 11px/1.5 monospace; background: #fdf6e3; padding: 8px; max-height: 300px; overflow: auto; }
 </style>
 </head>
 <body>
@@ -20,6 +21,8 @@
 <div id="result">(none yet)</div>
 <h3>Events</h3>
 <div id="events"></div>
+<h3>Diagnostics</h3>
+<div id="diag">probes pending…</div>
 
 <script src="./nmi-payments-cdn.iife.js"></script>
 <script>
@@ -48,7 +51,6 @@
     return {
       tokenizationKey: '6VqY8T-Uc4Eh9-Nj4Vg8-Kq3WU4',
       paymentMethods: ['card'],
-      surchargeProContext: { amount: '5.00', currency: 'USD' },
       onFieldsAvailable: function () {
         window.__p62.fieldsAvailable = true;
         document.getElementById('status').textContent = 'fields available';
@@ -89,6 +91,47 @@
     log('mount', 'mountNmiPayments returned, mount #' + window.__p62.mountCount);
     return widget;
   };
+
+  // Diagnostics: timed fetch probes, outcomes printed verbatim into #diag.
+  window.__p62.diag = [];
+  function diagLog(line) {
+    var stamped = new Date().toISOString() + ' ' + line;
+    window.__p62.diag.push(stamped);
+    var el = document.getElementById('diag');
+    if (el) el.textContent += stamped + '\n';
+  }
+  function runProbe(name, url, options) {
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, 20000);
+    var started = performance.now();
+    var opts = Object.assign({}, options || {}, { signal: controller.signal });
+    diagLog('[probe-start] ' + name + ' ' + (opts.method || 'GET') + ' ' + url);
+    return fetch(url, opts).then(function (resp) {
+      clearTimeout(timer);
+      var ms = Math.round(performance.now() - started);
+      diagLog('[probe-done] ' + name + ' HTTP ' + resp.status + ' ' + resp.statusText + ' in ' + ms + ' ms');
+    }).catch(function (err) {
+      clearTimeout(timer);
+      var ms = Math.round(performance.now() - started);
+      diagLog('[probe-error] ' + name + ' ' + String(err && err.name) + ': ' + String(err && err.message) + ' after ' + ms + ' ms');
+    });
+  }
+  function runDiagProbes() {
+    var el = document.getElementById('diag');
+    if (el) el.textContent = '';
+    diagLog('Diagnostics note: CORS may make the NMI probes report "TypeError: Failed to fetch" even when the server is reachable. Outcomes below are recorded verbatim.');
+    var key = '6VqY8T-Uc4Eh9-Nj4Vg8-Kq3WU4';
+    var form = new URLSearchParams();
+    form.set('tokenization_key', key);
+    runProbe('PROBE 1 nmi-token-create', 'https://secure.nmi.com/token/api/create', { method: 'POST', body: form });
+    runProbe('PROBE 2 control-post', 'https://example.com/', { method: 'POST', body: 'p62-probe' });
+    runProbe('PROBE 3 nmi-inline-get', 'https://secure.nmi.com/token/inline.php', { method: 'GET' });
+  }
+  if (document.readyState === 'complete') {
+    runDiagProbes();
+  } else {
+    window.addEventListener('load', runDiagProbes);
+  }
 
   try {
     window.__p62.mount();
